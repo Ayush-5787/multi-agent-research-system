@@ -1,0 +1,14 @@
+openai
+langchain
+langchain-openai
+langchain-core
+langchain-community
+langgraph
+langgraph-prebuilt
+exa-py
+beautifulsoup4
+requests
+httpx
+python-dotenv
+fastapi
+uvicorn[standard]
