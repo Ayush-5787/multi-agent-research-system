@@ -1,8 +1,8 @@
-openai
+streamlit
 langchain
-langchain-openai
 langchain-core
 langchain-community
+langchain-groq
 langgraph
 langgraph-prebuilt
 exa-py
