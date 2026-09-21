@@ -1,7 +1,7 @@
-streamlit
 langchain
 langchain-core
 langchain-community
+langchain-openai
 langchain-groq
 langgraph
 langgraph-prebuilt
@@ -12,4 +12,4 @@ httpx
 python-dotenv
 fastapi
 uvicorn[standard]
-langchain-openrouter
+streamlit

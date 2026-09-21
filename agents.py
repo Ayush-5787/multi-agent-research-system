@@ -1,8 +1,9 @@
 from dotenv import load_dotenv
+import os
 
 from langchain.agents import create_agent
 from langchain_groq import ChatGroq
-from langchain_openrouter import ChatOpenRouter
+from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
@@ -33,26 +34,29 @@ groq_llm = ChatGroq(
 # FALLBACK PROVIDER FOR SEARCH + READER
 # =========================================================
 
-openrouter_agent_llm = ChatOpenRouter(
+openrouter_agent_llm = ChatOpenAI(
     model="openai/gpt-oss-20b",
     temperature=0,
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.getenv("OPENROUTER_API_KEY"),
 )
 
 
 # =========================================================
 # OPENROUTER
-# WRITER + CRITIC + REVISION
+# WRITER / CRITIC / REVISION
 # =========================================================
 
-chain_llm = ChatOpenRouter(
+chain_llm = ChatOpenAI(
     model="openai/gpt-oss-20b",
     temperature=0,
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.getenv("OPENROUTER_API_KEY"),
 )
 
 
 # =========================================================
-# SEARCH AGENT
-# PRIMARY → GROQ
+# SEARCH AGENT → GROQ
 # =========================================================
 
 def build_search_agent():
@@ -60,12 +64,10 @@ def build_search_agent():
     return create_agent(
         model=groq_llm,
         tools=[web_search],
-
         system_prompt="""
 You are an expert web research agent.
 
-Your task is to research the exact question provided by
-the user.
+Research the exact question provided by the user.
 
 Rules:
 
@@ -74,9 +76,8 @@ Rules:
 3. Prefer recent and reliable sources.
 4. Do not search unrelated topics.
 5. Do not invent information.
-6. Return useful factual information.
-7. Include source titles and URLs.
-8. Keep the response concise.
+6. Include source titles and URLs.
+7. Keep the response concise.
 
 Return:
 
@@ -90,8 +91,7 @@ Relevant facts
 
 
 # =========================================================
-# SEARCH AGENT
-# FALLBACK → OPENROUTER
+# SEARCH AGENT → OPENROUTER FALLBACK
 # =========================================================
 
 def build_openrouter_search_agent():
@@ -99,12 +99,10 @@ def build_openrouter_search_agent():
     return create_agent(
         model=openrouter_agent_llm,
         tools=[web_search],
-
         system_prompt="""
 You are an expert web research agent.
 
-Your task is to research the exact question provided by
-the user.
+Research the exact question provided by the user.
 
 Rules:
 
@@ -113,9 +111,8 @@ Rules:
 3. Prefer recent and reliable sources.
 4. Do not search unrelated topics.
 5. Do not invent information.
-6. Return useful factual information.
-7. Include source titles and URLs.
-8. Keep the response concise.
+6. Include source titles and URLs.
+7. Keep the response concise.
 
 Return:
 
@@ -129,8 +126,7 @@ Relevant facts
 
 
 # =========================================================
-# READER AGENT
-# PRIMARY → GROQ
+# READER AGENT → GROQ
 # =========================================================
 
 def build_reader_agent():
@@ -138,23 +134,21 @@ def build_reader_agent():
     return create_agent(
         model=groq_llm,
         tools=[scrape_url],
-
         system_prompt="""
 You are an expert research reading agent.
 
-Your task is to read the most relevant webpage
-identified by the search process.
+Read the most relevant webpage identified by the
+search process.
 
 Rules:
 
 1. Use the scrape_url tool.
 2. Choose a URL relevant to the research question.
-3. Extract only useful factual information.
+3. Extract useful factual information.
 4. Preserve important dates, names and numbers.
 5. Do not invent information.
-6. Ignore advertisements and irrelevant content.
-7. Do not repeat unnecessary webpage text.
-8. Keep the response concise.
+6. Ignore irrelevant content.
+7. Keep the response concise.
 
 Return:
 
@@ -169,8 +163,7 @@ Source information
 
 
 # =========================================================
-# READER AGENT
-# FALLBACK → OPENROUTER
+# READER AGENT → OPENROUTER FALLBACK
 # =========================================================
 
 def build_openrouter_reader_agent():
@@ -178,23 +171,21 @@ def build_openrouter_reader_agent():
     return create_agent(
         model=openrouter_agent_llm,
         tools=[scrape_url],
-
         system_prompt="""
 You are an expert research reading agent.
 
-Your task is to read the most relevant webpage
-identified by the search process.
+Read the most relevant webpage identified by the
+search process.
 
 Rules:
 
 1. Use the scrape_url tool.
 2. Choose a URL relevant to the research question.
-3. Extract only useful factual information.
+3. Extract useful factual information.
 4. Preserve important dates, names and numbers.
 5. Do not invent information.
-6. Ignore advertisements and irrelevant content.
-7. Do not repeat unnecessary webpage text.
-8. Keep the response concise.
+6. Ignore irrelevant content.
+7. Keep the response concise.
 
 Return:
 
@@ -209,7 +200,7 @@ Source information
 
 
 # =========================================================
-# WRITER CHAIN
+# WRITER
 # OPENROUTER
 # =========================================================
 
@@ -220,8 +211,7 @@ writer_prompt = ChatPromptTemplate.from_messages(
             """
 You are an expert research report writer.
 
-Answer the user's research question using ONLY the
-research information supplied to you.
+Use ONLY the supplied research.
 
 Rules:
 
@@ -229,38 +219,34 @@ Rules:
 2. Do not invent sources.
 3. Do not invent URLs.
 4. Do not use unrelated information.
-5. Important claims must be supported by the research.
-6. Keep the report clear and factual.
-7. If the research does not contain enough information,
-   do not make up missing information.
+5. Keep the report factual.
+6. If information is missing, do not make it up.
 
 Use this structure:
 
 # Answer
 
-Give a direct answer to the research question.
+Give a direct answer.
 
 # Latest Key Developments
 
-Include 4-6 developments when supported by the research.
+Include important developments supported by the research.
 
 For each development include:
 
 - What happened
 - People, teams or organizations involved
 - Date
-- Result or important statistic
+- Result or statistic
 - Why it matters
 
 # Conclusion
 
-Give a concise conclusion based only on the research.
+Give a concise conclusion.
 
 # Sources
 
-List the sources actually present in the research.
-
-Do not create fake sources.
+List only sources present in the research.
 """
         ),
         (
@@ -286,7 +272,7 @@ writer_chain = (
 
 
 # =========================================================
-# CRITIC CHAIN
+# CRITIC
 # OPENROUTER
 # =========================================================
 
@@ -297,7 +283,7 @@ critic_prompt = ChatPromptTemplate.from_messages(
             """
 You are a strict research report critic.
 
-Review the draft report against the supplied research.
+Review the report against the supplied research.
 
 Check:
 
@@ -368,7 +354,7 @@ revision_prompt = ChatPromptTemplate.from_messages(
             """
 You are the final research report writer.
 
-Improve the original report using the critic's feedback.
+Improve the original report using the critic feedback.
 
 Rules:
 
@@ -380,9 +366,9 @@ Rules:
 6. Add information only when it exists in the research.
 7. Do not mention the critic.
 8. Do not mention the revision process.
-9. Keep the answer factual and concise.
+9. Keep the final answer factual and concise.
 
-Use exactly this structure:
+Use exactly:
 
 # Answer
 
