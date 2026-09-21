@@ -10,6 +10,7 @@ Pipeline:
 """
 
 import io
+import os
 import queue
 import threading
 import time
@@ -28,6 +29,25 @@ try:
     load_dotenv()
 except ImportError:
     pass
+
+
+# =========================================================
+# BRIDGE STREAMLIT CLOUD SECRETS -> ENVIRONMENT VARIABLES
+# (st.secrets is NOT automatically exported to os.environ,
+# so os.getenv() in agents.py / tools.py would return None
+# on Streamlit Cloud without this step)
+# =========================================================
+
+_REQUIRED_KEYS = ["EXA_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY"]
+
+for _key in _REQUIRED_KEYS:
+    if not os.getenv(_key):
+        try:
+            if _key in st.secrets:
+                os.environ[_key] = st.secrets[_key]
+        except Exception:
+            # No secrets.toml available (e.g. running purely from .env locally) — fine
+            pass
 
 
 # =========================================================
