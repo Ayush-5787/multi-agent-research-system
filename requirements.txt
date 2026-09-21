@@ -12,3 +12,4 @@ httpx
 python-dotenv
 fastapi
 uvicorn[standard]
+langchain-openrouter

@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 
 from langchain.agents import create_agent
 from langchain_groq import ChatGroq
+from langchain_openrouter import ChatOpenRouter
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
@@ -17,13 +18,44 @@ load_dotenv()
 
 # =========================================================
 # MODEL SETUP
+# GROQ = PRIMARY
+# OPENROUTER = AUTOMATIC FALLBACK
 # =========================================================
 
-llm = ChatGroq(
+groq_llm = ChatGroq(
     model="openai/gpt-oss-20b",
     temperature=0,
     reasoning_format="hidden",
-    max_completion_tokens=1000
+    max_completion_tokens=1000,
+)
+
+openrouter_llm = ChatOpenRouter(
+    model="openai/gpt-oss-20b",
+    temperature=0,
+    max_tokens=1000,
+)
+
+
+# =========================================================
+# AUTOMATIC FALLBACK
+# =========================================================
+#
+# Normal:
+#     Groq → response
+#
+# If Groq raises an error:
+#     Groq → OpenRouter → response
+#
+# The same fallback LLM is used by:
+# Search Agent
+# Reader Agent
+# Writer
+# Critic
+# Revision Writer
+# =========================================================
+
+llm = groq_llm.with_fallbacks(
+    [openrouter_llm]
 )
 
 
@@ -46,11 +78,13 @@ IMPORTANT:
 - Focus only on the user's topic.
 - Do not search unrelated topics.
 - Use the web_search tool.
-- Prefer recent sources.
-- Return useful facts and source URLs.
+- Prefer recent and reliable sources.
+- Return useful factual information.
+- Include source titles and URLs.
 - Do not make up information.
 
 Your response should contain:
+
 1. Important findings
 2. Source titles
 3. Source URLs
@@ -81,8 +115,10 @@ IMPORTANT:
 - Extract factual information.
 - Preserve important dates, names, numbers and events.
 - Do not make up information.
+- Ignore irrelevant information.
 
 Return:
+
 - Important facts
 - Main points
 - Dates
@@ -137,7 +173,7 @@ Give 4 to 6 important developments.
 
 For each development include:
 - What happened
-- Important people/teams/organizations
+- Important people, teams or organizations
 - Date if available
 - Important result or statistic
 - Why it matters
@@ -160,6 +196,12 @@ IMPORTANT:
     )
 ])
 
+
+# =========================================================
+# WRITER CHAIN
+# Uses Groq first, OpenRouter if Groq fails
+# =========================================================
+
 writer_chain = writer_prompt | llm | StrOutputParser()
 
 
@@ -179,6 +221,7 @@ research question.
 Be specific and constructive.
 
 Focus on:
+
 - Accuracy
 - Completeness
 - Relevance
@@ -186,6 +229,8 @@ Focus on:
 - Missing sources
 - Unsupported claims
 - Formatting
+
+Do not invent facts while reviewing the report.
 """
     ),
     (
@@ -220,6 +265,12 @@ One line verdict:
 """
     )
 ])
+
+
+# =========================================================
+# CRITIC CHAIN
+# Uses Groq first, OpenRouter if Groq fails
+# =========================================================
 
 critic_chain = critic_prompt | llm | StrOutputParser()
 
@@ -296,5 +347,11 @@ IMPORTANT:
 """
     )
 ])
+
+
+# =========================================================
+# REVISION CHAIN
+# Uses Groq first, OpenRouter if Groq fails
+# =========================================================
 
 revision_chain = revision_prompt | llm | StrOutputParser()

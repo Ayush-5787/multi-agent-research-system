@@ -1,27 +1,12 @@
 """
 Streamlit UI for the Multi-Agent Research Pipeline
-====================================================
 
-Wraps `run_research_pipeline()` from pipeline.py with a web UI:
-
-    1. Search Agent    -> finds recent, relevant sources
-    2. Reader Agent     -> scrapes the most relevant source
-    3. Writer           -> drafts a report from the research
-    4. Critic           -> reviews the draft for gaps/errors
-    5. Revision Writer  -> produces the final, polished answer
-
-The pipeline is run on a background thread so the UI can keep showing
-live progress (the same messages your terminal normally prints) while
-it works, instead of just freezing for several minutes.
-
-HOW TO RUN
-----------
-    pip install streamlit          # if not already installed
-    streamlit run streamlit_app.py
-
-Run this from the same folder as pipeline.py and agents.py, with any
-API keys your agents need already available in the environment
-(e.g. via a .env file - python-dotenv is loaded automatically below).
+Pipeline:
+1. Search Agent
+2. Reader Agent
+3. Writer
+4. Critic
+5. Revision Writer
 """
 
 import io
@@ -33,11 +18,20 @@ from datetime import datetime
 
 import streamlit as st
 
+# =========================================================
+# LOAD ENVIRONMENT VARIABLES
+# =========================================================
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
+
+
+# =========================================================
+# IMPORT PIPELINE
+# =========================================================
 
 from pipeline import run_research_pipeline
 
@@ -54,15 +48,37 @@ st.set_page_config(
 
 
 # =========================================================
+# SESSION STATE INITIALIZATION
+# IMPORTANT: Do this BEFORE using any session_state values
+# =========================================================
+
+if "pipeline_running" not in st.session_state:
+    st.session_state.pipeline_running = False
+
+if "result" not in st.session_state:
+    st.session_state.result = None
+
+if "log_lines" not in st.session_state:
+    st.session_state.log_lines = []
+
+if "active_topic" not in st.session_state:
+    st.session_state.active_topic = ""
+
+if "topic_input" not in st.session_state:
+    st.session_state.topic_input = ""
+
+
+# =========================================================
 # HELPERS
 # =========================================================
 
 class QueueWriter(io.TextIOBase):
-    """File-like object that pushes text into a queue instead of a
-    real stream, so a worker thread's print() output can be read live
-    from Streamlit's main thread."""
+    """
+    Sends print() output from the worker thread
+    into a queue so Streamlit can display it.
+    """
 
-    def __init__(self, log_queue: queue.Queue):
+    def __init__(self, log_queue):
         self.log_queue = log_queue
 
     def write(self, text):
@@ -75,53 +91,102 @@ class QueueWriter(io.TextIOBase):
 
 
 def run_pipeline_worker(topic, log_queue, result_holder):
-    """Runs the pipeline on a background thread and redirects its
-    print() output into log_queue so the UI can display it live."""
+    """
+    Run the research pipeline in a background thread.
+    """
+
     try:
         with redirect_stdout(QueueWriter(log_queue)):
             result_holder["result"] = run_research_pipeline(topic)
+
     except Exception as exc:
         result_holder["error"] = exc
+
     finally:
         result_holder["done"] = True
 
 
-def render_results(result: dict):
+def render_results(result):
+    """
+    Display all pipeline results in tabs.
+    """
+
     tab_final, tab_draft, tab_critic, tab_search, tab_scraped = st.tabs(
-        ["✅ Final Report", "📝 Draft Report", "🧐 Critic Feedback",
-         "🌐 Search Results", "📄 Scraped Content"]
+        [
+            "✅ Final Report",
+            "📝 Draft Report",
+            "🧐 Critic Feedback",
+            "🌐 Search Results",
+            "📄 Scraped Content",
+        ]
     )
 
+    # -----------------------------------------------------
+    # FINAL REPORT
+    # -----------------------------------------------------
+
     with tab_final:
-        st.markdown(result.get("final_answer") or "_No final answer produced._")
+        final_answer = result.get("final_answer", "")
+
+        if final_answer:
+            st.markdown(final_answer)
+        else:
+            st.info("No final answer was produced.")
+
         st.download_button(
-            "⬇️ Download final report (.md)",
-            data=result.get("final_answer", ""),
+            label="⬇️ Download final report (.md)",
+            data=final_answer,
             file_name="research_report.md",
             mime="text/markdown",
         )
 
+    # -----------------------------------------------------
+    # DRAFT
+    # -----------------------------------------------------
+
     with tab_draft:
-        st.markdown(result.get("report") or "_No draft report produced._")
+        draft = result.get("report", "")
+
+        if draft:
+            st.markdown(draft)
+        else:
+            st.info("No draft report was produced.")
+
+    # -----------------------------------------------------
+    # CRITIC
+    # -----------------------------------------------------
 
     with tab_critic:
-        st.markdown(result.get("feedback") or "_No feedback produced._")
+        feedback = result.get("feedback", "")
+
+        if feedback:
+            st.markdown(feedback)
+        else:
+            st.info("No critic feedback was produced.")
+
+    # -----------------------------------------------------
+    # SEARCH RESULTS
+    # -----------------------------------------------------
 
     with tab_search:
-        st.text(result.get("search_results") or "No search results.")
+        search_results = result.get("search_results", "")
+
+        if search_results:
+            st.text(search_results)
+        else:
+            st.info("No search results available.")
+
+    # -----------------------------------------------------
+    # SCRAPED CONTENT
+    # -----------------------------------------------------
 
     with tab_scraped:
-        st.text(result.get("scraped_content") or "No scraped content.")
+        scraped_content = result.get("scraped_content", "")
 
-
-# =========================================================
-# SESSION STATE
-# =========================================================
-
-st.session_state.setdefault("pipeline_running", False)
-st.session_state.setdefault("result", None)
-st.session_state.setdefault("log_lines", [])
-st.session_state.setdefault("active_topic", "")
+        if scraped_content:
+            st.text(scraped_content)
+        else:
+            st.info("No scraped content available.")
 
 
 # =========================================================
@@ -129,91 +194,214 @@ st.session_state.setdefault("active_topic", "")
 # =========================================================
 
 with st.sidebar:
-    st.header("About this pipeline")
+
+    st.header("🔎 About this Pipeline")
+
     st.markdown(
-        "**1. Search Agent** — finds recent, relevant sources\n\n"
-        "**2. Reader Agent** — scrapes the best source in depth\n\n"
-        "**3. Writer** — drafts a report from the research\n\n"
-        "**4. Critic** — reviews the draft for gaps and errors\n\n"
-        "**5. Revision Writer** — produces the final answer"
+        """
+        **1. Search Agent**  
+        Finds recent and relevant sources.
+
+        **2. Reader Agent**  
+        Reads and extracts useful information.
+
+        **3. Writer**  
+        Creates a research draft.
+
+        **4. Critic**  
+        Checks the draft for gaps and errors.
+
+        **5. Revision Writer**  
+        Produces the final polished answer.
+        """
     )
+
     st.divider()
-    st.caption(f"Session started {datetime.now().strftime('%H:%M:%S')}")
+
+    st.caption(
+        f"Session started "
+        f"{datetime.now().strftime('%H:%M:%S')}"
+    )
 
 
 # =========================================================
-# MAIN UI - INPUT
+# MAIN UI
 # =========================================================
 
 st.title("🔎 Multi-Agent Research Assistant")
+
 st.write(
-    "Ask a research question and the agent pipeline will search the "
-    "web, read the best source, draft a report, critique it, and hand "
-    "back a polished final answer."
+    "Ask a research question and the multi-agent pipeline will "
+    "search the web, read the best source, draft a report, "
+    "critique it, and produce a polished final answer."
 )
+
+
+# =========================================================
+# TOPIC INPUT
+# =========================================================
 
 st.text_area(
     "Research topic / question",
     key="topic_input",
-    placeholder="e.g. What are the latest breakthroughs in solid-state batteries?",
-    height=80,
+    placeholder=(
+        "e.g. What are the latest breakthroughs "
+        "in solid-state batteries?"
+    ),
+    height=100,
     disabled=st.session_state.pipeline_running,
+)
+
+
+# =========================================================
+# RUN BUTTON
+# =========================================================
+
+topic_is_valid = bool(
+    st.session_state.topic_input.strip()
 )
 
 start_clicked = st.button(
     "🚀 Run Research",
     type="primary",
-    disabled=st.session_state.pipeline_running or not st.session_state.topic_input.strip(),
+    disabled=(
+        st.session_state.pipeline_running
+        or not topic_is_valid
+    ),
 )
 
+
+# =========================================================
+# START PIPELINE
+# =========================================================
+
 if start_clicked:
-    st.session_state.active_topic = st.session_state.topic_input.strip()
+
+    st.session_state.active_topic = (
+        st.session_state.topic_input.strip()
+    )
+
     st.session_state.pipeline_running = True
     st.session_state.result = None
     st.session_state.log_lines = []
+
     st.rerun()
 
 
 # =========================================================
-# RUN PIPELINE (this script run blocks here, updating the UI live)
+# RUN PIPELINE
 # =========================================================
 
-if st.session_state.pipeline_running and st.session_state.result is None:
+if (
+    st.session_state.pipeline_running
+    and st.session_state.result is None
+):
 
-    log_queue: queue.Queue = queue.Queue()
-    result_holder = {"done": False}
+    log_queue = queue.Queue()
+
+    result_holder = {
+        "done": False
+    }
 
     worker = threading.Thread(
         target=run_pipeline_worker,
-        args=(st.session_state.active_topic, log_queue, result_holder),
+        args=(
+            st.session_state.active_topic,
+            log_queue,
+            result_holder,
+        ),
         daemon=True,
     )
+
     worker.start()
 
-    with st.status("Running the pipeline... this can take a few minutes.", expanded=True) as status:
+    with st.status(
+        "Running the research pipeline...",
+        expanded=True,
+    ) as status:
+
         log_box = st.empty()
 
+        # -------------------------------------------------
+        # SHOW LIVE LOGS
+        # -------------------------------------------------
+
         while not result_holder.get("done"):
+
             new_output = False
+
             while not log_queue.empty():
-                st.session_state.log_lines.append(log_queue.get())
+
+                output = log_queue.get()
+
+                st.session_state.log_lines.append(
+                    output
+                )
+
                 new_output = True
+
             if new_output:
-                log_box.code("".join(st.session_state.log_lines[-500:]), language=None)
+
+                log_box.code(
+                    "".join(
+                        st.session_state.log_lines[-500:]
+                    )
+                )
+
             time.sleep(0.25)
 
-        # Flush anything produced right at the very end
+        # -------------------------------------------------
+        # FLUSH REMAINING LOGS
+        # -------------------------------------------------
+
         while not log_queue.empty():
-            st.session_state.log_lines.append(log_queue.get())
-        log_box.code("".join(st.session_state.log_lines[-500:]), language=None)
+
+            st.session_state.log_lines.append(
+                log_queue.get()
+            )
+
+        log_box.code(
+            "".join(
+                st.session_state.log_lines[-500:]
+            )
+        )
+
+        # -------------------------------------------------
+        # PIPELINE ERROR
+        # -------------------------------------------------
 
         if "error" in result_holder:
-            status.update(label="Pipeline failed ❌", state="error")
+
+            status.update(
+                label="Pipeline failed ❌",
+                state="error",
+            )
+
             st.session_state.pipeline_running = False
-            st.error(f"The pipeline raised an error:\n\n```\n{result_holder['error']}\n```")
+
+            st.error(
+                "The research pipeline raised an error:"
+            )
+
+            st.exception(
+                result_holder["error"]
+            )
+
+        # -------------------------------------------------
+        # PIPELINE SUCCESS
+        # -------------------------------------------------
+
         else:
-            status.update(label="Pipeline complete ✅", state="complete")
-            st.session_state.result = result_holder["result"]
+
+            status.update(
+                label="Pipeline complete ✅",
+                state="complete",
+            )
+
+            st.session_state.result = (
+                result_holder.get("result")
+            )
+
             st.session_state.pipeline_running = False
 
     st.rerun()
@@ -224,12 +412,25 @@ if st.session_state.pipeline_running and st.session_state.result is None:
 # =========================================================
 
 if st.session_state.result is not None:
-    st.divider()
-    st.subheader(f"Results for: _{st.session_state.active_topic}_")
-    render_results(st.session_state.result)
 
-    if st.button("🔄 Start a new research"):
+    st.divider()
+
+    st.subheader(
+        f"Results for: "
+        f"_{st.session_state.active_topic}_"
+    )
+
+    render_results(
+        st.session_state.result
+    )
+
+    st.divider()
+
+    if st.button("🔄 Start a New Research"):
+
         st.session_state.result = None
         st.session_state.log_lines = []
         st.session_state.active_topic = ""
+        st.session_state.topic_input = ""
+
         st.rerun()
