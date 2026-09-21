@@ -1,56 +1,127 @@
 import time
 
 from agents import (
-    build_reader_agent,
     build_search_agent,
+    build_openrouter_search_agent,
+    build_reader_agent,
+    build_openrouter_reader_agent,
     writer_chain,
     critic_chain,
-    revision_chain
+    revision_chain,
 )
 
 
 # =========================================================
-# HELPER FUNCTION
+# HELPER: EXTRACT FINAL TEXT FROM AGENT
 # =========================================================
 
-def invoke_with_retry(chain, inputs, name="LLM", attempts=3):
+def extract_agent_text(result):
+    """
+    Extract the last useful text response from a LangChain agent.
+    Avoids relying on messages[-1], which can be a tool message.
+    """
 
-    for attempt in range(attempts):
+    messages = result.get("messages", [])
 
-        try:
+    for message in reversed(messages):
+        content = getattr(message, "content", "")
 
-            print(f"\n{name} - Attempt {attempt + 1}/{attempts}")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
 
-            result = chain.invoke(inputs)
+        if isinstance(content, list):
+            parts = []
+
+            for item in content:
+                if isinstance(item, dict):
+                    text = item.get("text", "")
+                    if text:
+                        parts.append(text)
+
+            if parts:
+                return "\n".join(parts).strip()
+
+    return ""
+
+
+# =========================================================
+# AGENT WITH PROVIDER FALLBACK
+# =========================================================
+
+def invoke_agent_with_fallback(
+    primary_agent,
+    fallback_agent,
+    inputs,
+    name
+):
+
+    # -----------------------------------------------------
+    # TRY PRIMARY
+    # -----------------------------------------------------
+
+    try:
+
+        print(f"\n{name} - Primary provider: Groq")
+
+        result = primary_agent.invoke(inputs)
+
+        text = extract_agent_text(result)
+
+        if text:
+
+            print(f"\n{name} completed using Groq.")
 
             return result
 
-        except Exception as e:
+        print(f"\n{name} - Groq returned an empty response.")
 
-            print(f"\n{name} failed:")
-            print(e)
+    except Exception as e:
 
-            if attempt < attempts - 1:
+        print(f"\n{name} - Groq failed:")
+        print(e)
 
-                print("\nWaiting 10 seconds before retry...")
-                time.sleep(10)
+    # -----------------------------------------------------
+    # FALLBACK
+    # -----------------------------------------------------
 
-            else:
+    print(f"\n{name} - Switching to OpenRouter fallback...")
 
-                raise
+    try:
+
+        result = fallback_agent.invoke(inputs)
+
+        text = extract_agent_text(result)
+
+        if not text:
+
+            raise RuntimeError(
+                f"{name} - OpenRouter returned an empty response."
+            )
+
+        print(
+            f"\n{name} completed using OpenRouter fallback."
+        )
+
+        return result
+
+    except Exception as e:
+
+        print(f"\n{name} - OpenRouter fallback failed:")
+        print(e)
+
+        raise
 
 
 # =========================================================
-# MAIN RESEARCH PIPELINE
+# MAIN PIPELINE
 # =========================================================
 
 def run_research_pipeline(topic: str) -> dict:
 
     state = {}
 
-
     # =====================================================
-    # STEP 1 - SEARCH AGENT
+    # STEP 1 - SEARCH
     # =====================================================
 
     print("\n" + "=" * 60)
@@ -59,8 +130,13 @@ def run_research_pipeline(topic: str) -> dict:
 
     search_agent = build_search_agent()
 
-    search_result = invoke_with_retry(
+    openrouter_search_agent = (
+        build_openrouter_search_agent()
+    )
+
+    search_result = invoke_agent_with_fallback(
         search_agent,
+        openrouter_search_agent,
         {
             "messages": [
                 (
@@ -74,12 +150,17 @@ Find recent, reliable and relevant information.
 
 Search ONLY for information related to this question.
 
+Use the web_search tool.
+
 Return:
+
 - Important findings
 - Source titles
 - URLs
 - Dates
 - Relevant facts
+
+Keep the answer concise.
 """
                 )
             ]
@@ -87,14 +168,22 @@ Return:
         name="Search Agent"
     )
 
-    state["search_results"] = search_result["messages"][-1].content
+    search_text = extract_agent_text(search_result)
+
+    if not search_text:
+
+        raise RuntimeError(
+            "Search Agent returned no usable search results."
+        )
+
+    state["search_results"] = search_text
 
     print("\nSEARCH RESULTS:\n")
     print(state["search_results"])
 
 
     # =====================================================
-    # STEP 2 - READER AGENT
+    # STEP 2 - READER
     # =====================================================
 
     print("\n" + "=" * 60)
@@ -103,11 +192,18 @@ Return:
 
     reader_agent = build_reader_agent()
 
-    # Limit search information to avoid unnecessary token usage
-    search_for_reader = state["search_results"][:6000]
+    openrouter_reader_agent = (
+        build_openrouter_reader_agent()
+    )
 
-    reader_result = invoke_with_retry(
+    # Keep the search input small
+    search_for_reader = (
+        state["search_results"][:6000]
+    )
+
+    reader_result = invoke_agent_with_fallback(
         reader_agent,
+        openrouter_reader_agent,
         {
             "messages": [
                 (
@@ -121,10 +217,23 @@ Below are the search results:
 
 {search_for_reader}
 
-Choose the most relevant URL related to the research
-question and scrape it.
+Choose the most relevant URL related to the
+research question.
 
-Extract the important facts from that source.
+Use the scrape_url tool to read that webpage.
+
+Extract only the important factual information.
+
+Return:
+
+- Important facts
+- Main points
+- Dates
+- Names
+- Statistics
+- Useful source information
+
+Keep the answer concise.
 """
                 )
             ]
@@ -132,7 +241,17 @@ Extract the important facts from that source.
         name="Reader Agent"
     )
 
-    state["scraped_content"] = reader_result["messages"][-1].content
+    scraped_text = extract_agent_text(
+        reader_result
+    )
+
+    if not scraped_text:
+
+        raise RuntimeError(
+            "Reader Agent returned no usable content."
+        )
+
+    state["scraped_content"] = scraped_text
 
     print("\nSCRAPED CONTENT:\n")
     print(state["scraped_content"])
@@ -155,17 +274,24 @@ Extract the important facts from that source.
 
     state["research"] = research_combined
 
-    state["report"] = invoke_with_retry(
-        writer_chain,
-        {
-            "topic": topic,
-            "research": research_combined
-        },
-        name="Writer"
-    )
+    try:
 
-    print("\nINITIAL REPORT:\n")
-    print(state["report"])
+        state["report"] = writer_chain.invoke(
+            {
+                "topic": topic,
+                "research": research_combined
+            }
+        )
+
+        print("\nINITIAL REPORT:\n")
+        print(state["report"])
+
+    except Exception as e:
+
+        print("\nWriter failed:")
+        print(e)
+
+        raise
 
 
     # =====================================================
@@ -176,67 +302,71 @@ Extract the important facts from that source.
     print("STEP 4 - Critic is reviewing the report...")
     print("=" * 60)
 
-    # Give Groq's TPM window some time
-    print("\nWaiting for Groq rate limit window...")
-    time.sleep(5)
+    try:
 
-    state["feedback"] = invoke_with_retry(
-        critic_chain,
-        {
-            "topic": topic,
-            "report": state["report"][:7000]
-        },
-        name="Critic"
-    )
+        state["feedback"] = critic_chain.invoke(
+            {
+                "topic": topic,
+                "research": state["research"][:10000],
+                "report": state["report"][:7000]
+            }
+        )
 
-    print("\nCRITIC REPORT:\n")
-    print(state["feedback"])
+        print("\nCRITIC REPORT:\n")
+        print(state["feedback"])
+
+    except Exception as e:
+
+        print("\nCritic failed:")
+        print(e)
+
+        raise
 
 
     # =====================================================
-    # STEP 5 - REVISION WRITER
+    # STEP 5 - FINAL WRITER
     # =====================================================
 
     print("\n" + "=" * 60)
     print("STEP 5 - Final Writer is improving the answer...")
     print("=" * 60)
 
-    # Give Groq another moment before final request
-    print("\nWaiting for Groq rate limit window...")
-    time.sleep(5)
+    try:
 
-    state["final_answer"] = invoke_with_retry(
-        revision_chain,
-        {
-            "topic": topic,
-            "research": state["research"],
-            "report": state["report"][:6000],
-            "feedback": state["feedback"][:4000]
-        },
-        name="Final Writer"
-    )
+        state["final_answer"] = revision_chain.invoke(
+            {
+                "topic": topic,
+                "research": state["research"][:10000],
+                "report": state["report"][:6000],
+                "feedback": state["feedback"][:4000]
+            }
+        )
 
-    print("\n" + "=" * 60)
-    print("FINAL ANSWER")
-    print("=" * 60)
+        print("\n" + "=" * 60)
+        print("FINAL ANSWER")
+        print("=" * 60)
 
-    print("\n")
-    print(state["final_answer"])
+        print(state["final_answer"])
 
+    except Exception as e:
 
-    # =====================================================
-    # RETURN COMPLETE STATE
-    # =====================================================
+        print("\nFinal Writer failed:")
+        print(e)
+
+        raise
+
 
     return state
 
 
 # =========================================================
-# PROGRAM START
+# DIRECT TERMINAL TEST
 # =========================================================
 
 if __name__ == "__main__":
 
-    topic = input("\nEnter a research topic: ")
+    topic = input(
+        "\nEnter a research topic: "
+    )
 
     result = run_research_pipeline(topic)

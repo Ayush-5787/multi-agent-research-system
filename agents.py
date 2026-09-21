@@ -17,341 +17,409 @@ load_dotenv()
 
 
 # =========================================================
-# MODEL SETUP
-# GROQ = PRIMARY
-# OPENROUTER = AUTOMATIC FALLBACK
+# GROQ
+# PRIMARY PROVIDER FOR SEARCH + READER
 # =========================================================
 
 groq_llm = ChatGroq(
     model="openai/gpt-oss-20b",
     temperature=0,
-    reasoning_format="hidden",
-    max_completion_tokens=1000,
+    max_tokens=800,
 )
 
-openrouter_llm = ChatOpenRouter(
+
+# =========================================================
+# OPENROUTER
+# FALLBACK PROVIDER FOR SEARCH + READER
+# =========================================================
+
+openrouter_agent_llm = ChatOpenRouter(
     model="openai/gpt-oss-20b",
     temperature=0,
-    max_tokens=1000,
+    max_tokens=800,
 )
 
 
 # =========================================================
-# AUTOMATIC FALLBACK
-# =========================================================
-#
-# Normal:
-#     Groq → response
-#
-# If Groq raises an error:
-#     Groq → OpenRouter → response
-#
-# The same fallback LLM is used by:
-# Search Agent
-# Reader Agent
-# Writer
-# Critic
-# Revision Writer
+# OPENROUTER
+# WRITER + CRITIC + REVISION
 # =========================================================
 
-llm = groq_llm.with_fallbacks(
-    [openrouter_llm]
+chain_llm = ChatOpenRouter(
+    model="openai/gpt-oss-20b",
+    temperature=0,
+    max_tokens=1200,
 )
 
 
 # =========================================================
-# 1. SEARCH AGENT
+# SEARCH AGENT
+# PRIMARY → GROQ
 # =========================================================
 
 def build_search_agent():
 
     return create_agent(
-        model=llm,
+        model=groq_llm,
         tools=[web_search],
+
         system_prompt="""
 You are an expert web research agent.
 
-Your job is to search the web for recent and reliable
-information about the exact topic provided by the user.
+Your task is to research the exact question provided by
+the user.
 
-IMPORTANT:
-- Focus only on the user's topic.
-- Do not search unrelated topics.
-- Use the web_search tool.
-- Prefer recent and reliable sources.
-- Return useful factual information.
-- Include source titles and URLs.
-- Do not make up information.
+Rules:
 
-Your response should contain:
+1. Focus only on the user's question.
+2. Use the web_search tool.
+3. Prefer recent and reliable sources.
+4. Do not search unrelated topics.
+5. Do not invent information.
+6. Return useful factual information.
+7. Include source titles and URLs.
+8. Keep the response concise.
 
-1. Important findings
-2. Source titles
-3. Source URLs
-4. Relevant details
+Return:
+
+Important findings
+Source titles
+Source URLs
+Relevant dates
+Relevant facts
 """
     )
 
 
 # =========================================================
-# 2. READER AGENT
+# SEARCH AGENT
+# FALLBACK → OPENROUTER
+# =========================================================
+
+def build_openrouter_search_agent():
+
+    return create_agent(
+        model=openrouter_agent_llm,
+        tools=[web_search],
+
+        system_prompt="""
+You are an expert web research agent.
+
+Your task is to research the exact question provided by
+the user.
+
+Rules:
+
+1. Focus only on the user's question.
+2. Use the web_search tool.
+3. Prefer recent and reliable sources.
+4. Do not search unrelated topics.
+5. Do not invent information.
+6. Return useful factual information.
+7. Include source titles and URLs.
+8. Keep the response concise.
+
+Return:
+
+Important findings
+Source titles
+Source URLs
+Relevant dates
+Relevant facts
+"""
+    )
+
+
+# =========================================================
+# READER AGENT
+# PRIMARY → GROQ
 # =========================================================
 
 def build_reader_agent():
 
     return create_agent(
-        model=llm,
+        model=groq_llm,
         tools=[scrape_url],
+
         system_prompt="""
 You are an expert research reading agent.
 
-Your job is to read webpages and extract useful information
-for the research question.
+Your task is to read the most relevant webpage
+identified by the search process.
 
-Use the scrape_url tool to read the provided URL.
+Rules:
 
-IMPORTANT:
-- Only read URLs related to the requested topic.
-- Extract factual information.
-- Preserve important dates, names, numbers and events.
-- Do not make up information.
-- Ignore irrelevant information.
+1. Use the scrape_url tool.
+2. Choose a URL relevant to the research question.
+3. Extract only useful factual information.
+4. Preserve important dates, names and numbers.
+5. Do not invent information.
+6. Ignore advertisements and irrelevant content.
+7. Do not repeat unnecessary webpage text.
+8. Keep the response concise.
 
 Return:
 
-- Important facts
-- Main points
-- Dates
-- Names
-- Statistics
-- Useful source information
+Important facts
+Main points
+Dates
+Names
+Statistics
+Source information
 """
     )
 
 
 # =========================================================
-# 3. WRITER CHAIN
+# READER AGENT
+# FALLBACK → OPENROUTER
 # =========================================================
 
-writer_prompt = ChatPromptTemplate.from_messages([
-    (
-        "system",
-        """
-You are an expert research writer.
+def build_openrouter_reader_agent():
 
-Your job is to answer the user's research question using
-ONLY the research provided.
+    return create_agent(
+        model=openrouter_agent_llm,
+        tools=[scrape_url],
 
-Create a complete, useful and factual answer.
+        system_prompt="""
+You are an expert research reading agent.
 
-Do not invent information.
+Your task is to read the most relevant webpage
+identified by the search process.
 
-Every important claim should be supported by the provided
-research.
+Rules:
 
-Keep the answer focused on the user's question.
-"""
-    ),
-    (
-        "human",
-        """
-User's Research Question:
-{topic}
+1. Use the scrape_url tool.
+2. Choose a URL relevant to the research question.
+3. Extract only useful factual information.
+4. Preserve important dates, names and numbers.
+5. Do not invent information.
+6. Ignore advertisements and irrelevant content.
+7. Do not repeat unnecessary webpage text.
+8. Keep the response concise.
 
-Research Gathered:
-{research}
+Return:
 
-Write the answer using this structure:
-
-# Answer
-
-Give a short direct introduction answering the question.
-
-# Latest Key Developments
-
-Give 4 to 6 important developments.
-
-For each development include:
-- What happened
-- Important people, teams or organizations
-- Date if available
-- Important result or statistic
-- Why it matters
-
-# Conclusion
-
-Give a short summary.
-
-# Sources
-
-List the source title and URL for every source used.
-
-IMPORTANT:
-- Do NOT leave sections unfinished.
-- Do NOT create fake sources.
-- Do NOT invent URLs.
-- Answer the user's actual question.
-- Make the answer complete but concise.
+Important facts
+Main points
+Dates
+Names
+Statistics
+Source information
 """
     )
-])
 
 
 # =========================================================
 # WRITER CHAIN
-# Uses Groq first, OpenRouter if Groq fails
+# OPENROUTER
 # =========================================================
 
-writer_chain = writer_prompt | llm | StrOutputParser()
+writer_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """
+You are an expert research report writer.
 
+Answer the user's research question using ONLY the
+research information supplied to you.
 
-# =========================================================
-# 4. CRITIC CHAIN
-# =========================================================
+Rules:
 
-critic_prompt = ChatPromptTemplate.from_messages([
-    (
-        "system",
-        """
-You are a strict research report critic.
-
-Check whether the report actually answers the user's
-research question.
-
-Be specific and constructive.
-
-Focus on:
-
-- Accuracy
-- Completeness
-- Relevance
-- Missing information
-- Missing sources
-- Unsupported claims
-- Formatting
-
-Do not invent facts while reviewing the report.
-"""
-    ),
-    (
-        "human",
-        """
-Research Question:
-{topic}
-
-Report:
-{report}
-
-Review the report.
-
-Respond in this format:
-
-Score: X/10
-
-Strengths:
-- ...
-- ...
-
-Areas to Improve:
-- ...
-- ...
-
-Required Changes:
-- ...
-- ...
-
-One line verdict:
-...
-"""
-    )
-])
-
-
-# =========================================================
-# CRITIC CHAIN
-# Uses Groq first, OpenRouter if Groq fails
-# =========================================================
-
-critic_chain = critic_prompt | llm | StrOutputParser()
-
-
-# =========================================================
-# 5. REVISION WRITER
-# =========================================================
-
-revision_prompt = ChatPromptTemplate.from_messages([
-    (
-        "system",
-        """
-You are the final research editor.
-
-Your job is to improve the research report using the
-critic's feedback.
-
-The final answer must directly answer the user's question.
-
-Use only information contained in the original report
-and research.
-
-Do not invent facts or sources.
-
-Fix incomplete sections and improve clarity.
-
-Do not mention the critic or the revision process
-in the final answer.
-"""
-    ),
-    (
-        "human",
-        """
-Research Question:
-{topic}
-
-Original Research:
-{research}
-
-Original Report:
-{report}
-
-Critic Feedback:
-{feedback}
-
-Now produce the FINAL research answer.
+1. Do not invent facts.
+2. Do not invent sources.
+3. Do not invent URLs.
+4. Do not use unrelated information.
+5. Important claims must be supported by the research.
+6. Keep the report clear and factual.
+7. If the research does not contain enough information,
+   do not make up missing information.
 
 Use this structure:
 
 # Answer
 
-Directly answer the user's question.
+Give a direct answer to the research question.
 
 # Latest Key Developments
 
-Give the most important developments relevant to
-the question.
+Include 4-6 developments when supported by the research.
+
+For each development include:
+
+- What happened
+- People, teams or organizations involved
+- Date
+- Result or important statistic
+- Why it matters
 
 # Conclusion
 
-Summarize the answer.
+Give a concise conclusion based only on the research.
 
 # Sources
 
-List the source title and URL.
+List the sources actually present in the research.
 
-IMPORTANT:
-- Complete every section.
-- Do not leave unfinished points.
-- Do not invent information.
-- Do not invent URLs.
-- Remove irrelevant information.
-- Keep the answer focused on the user's question.
+Do not create fake sources.
 """
-    )
-])
+        ),
+        (
+            "human",
+            """
+Research question:
+
+{topic}
+
+Research:
+
+{research}
+"""
+        ),
+    ]
+)
+
+writer_chain = (
+    writer_prompt
+    | chain_llm
+    | StrOutputParser()
+)
 
 
 # =========================================================
-# REVISION CHAIN
-# Uses Groq first, OpenRouter if Groq fails
+# CRITIC CHAIN
+# OPENROUTER
 # =========================================================
 
-revision_chain = revision_prompt | llm | StrOutputParser()
+critic_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """
+You are a strict research report critic.
+
+Review the draft report against the supplied research.
+
+Check:
+
+1. Accuracy
+2. Completeness
+3. Relevance
+4. Missing information
+5. Missing sources
+6. Unsupported claims
+7. Incorrect dates
+8. Incorrect numbers
+9. Formatting
+
+Do not invent corrections.
+
+Return:
+
+Score: X/10
+
+Strengths:
+- ...
+
+Areas to Improve:
+- ...
+
+Required Changes:
+- ...
+
+Verdict:
+One concise sentence.
+"""
+        ),
+        (
+            "human",
+            """
+Research question:
+
+{topic}
+
+Research:
+
+{research}
+
+Draft report:
+
+{report}
+"""
+        ),
+    ]
+)
+
+critic_chain = (
+    critic_prompt
+    | chain_llm
+    | StrOutputParser()
+)
+
+
+# =========================================================
+# REVISION WRITER
+# OPENROUTER
+# =========================================================
+
+revision_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """
+You are the final research report writer.
+
+Improve the original report using the critic's feedback.
+
+Rules:
+
+1. Use only information from the supplied research.
+2. Do not invent facts.
+3. Do not invent sources.
+4. Do not invent URLs.
+5. Correct unsupported claims.
+6. Add information only when it exists in the research.
+7. Do not mention the critic.
+8. Do not mention the revision process.
+9. Keep the answer factual and concise.
+
+Use exactly this structure:
+
+# Answer
+
+# Latest Key Developments
+
+# Conclusion
+
+# Sources
+"""
+        ),
+        (
+            "human",
+            """
+Research question:
+
+{topic}
+
+Original research:
+
+{research}
+
+Original report:
+
+{report}
+
+Critic feedback:
+
+{feedback}
+"""
+        ),
+    ]
+)
+
+revision_chain = (
+    revision_prompt
+    | chain_llm
+    | StrOutputParser()
+)

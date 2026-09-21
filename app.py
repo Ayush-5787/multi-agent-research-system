@@ -24,6 +24,7 @@ import streamlit as st
 
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     pass
@@ -49,7 +50,6 @@ st.set_page_config(
 
 # =========================================================
 # SESSION STATE INITIALIZATION
-# IMPORTANT: Do this BEFORE using any session_state values
 # =========================================================
 
 if "pipeline_running" not in st.session_state:
