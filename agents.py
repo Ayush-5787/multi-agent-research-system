@@ -36,7 +36,6 @@ groq_llm = ChatGroq(
 openrouter_agent_llm = ChatOpenRouter(
     model="openai/gpt-oss-20b",
     temperature=0,
-    max_tokens=800,
 )
 
 
@@ -48,7 +47,6 @@ openrouter_agent_llm = ChatOpenRouter(
 chain_llm = ChatOpenRouter(
     model="openai/gpt-oss-20b",
     temperature=0,
-    max_tokens=1200,
 )
 
 
